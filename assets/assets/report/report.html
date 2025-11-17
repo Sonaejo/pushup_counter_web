@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Report(JS)</title>
+  <link rel="stylesheet" href="https://unpkg.com/modern-normalize/modern-normalize.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script defer src="report.js"></script>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; background:#0e0e0e; color:#fff; margin:0; }
+    .wrap { padding:16px; }
+    .card { background:#151515; border-radius:16px; padding:16px; }
+    .row { display:flex; align-items:flex-end; gap:16px; }
+    .big { font-weight:900; font-size:40px; }
+    .muted { color:#bbb; }
+    .right { margin-left:auto; text-align:right; }
+    .btn { background:#2962ff; color:#fff; border:0; padding:10px 14px; border-radius:12px; cursor:pointer; }
+
+    .sheet {
+      position: fixed; left: 0; right: 0; bottom: 0;
+      background: #fff; color:#111; border-radius: 16px 16px 0 0;
+      box-shadow: 0 -10px 30px rgba(0,0,0,.35); transform: translateY(100%);
+      transition: transform .25s ease; padding:16px;
+      /* iOS でのスクロール最適化 */
+      -webkit-overflow-scrolling: touch;
+    }
+    .sheet.open { transform: translateY(0); }
+
+    .seg { background:#f2f4f7; border-radius:999px; padding:4px; display:inline-flex; gap:4px;}
+    .seg button { border:0; background:transparent; padding:8px 16px; border-radius:999px; cursor:pointer; font-weight:700;}
+    .seg button.on { background:#2962ff; color:#fff;}
+    .handle { width:44px; height:5px; background:#e1e5ea; border-radius:999px; margin:6px auto 10px; }
+    .center { text-align:center; }
+
+    .ruler {
+      height:38px; position:relative;
+      /* ★ 横ドラッグをコンポーネントに渡し、縦スクロールだけブラウザに任せる */
+      touch-action: pan-y;
+      user-select: none;
+    }
+    .ruler .tick { position:absolute; bottom:0; width:1px; background:#0002;}
+    .ruler .tick.major { height:22px; background:#0004; }
+    .ruler .tick.minor { height:10px; }
+    .ruler .label { position:absolute; top:0; width:24px; margin-left:-12px; text-align:center; font-size:10px; color:#0009;}
+    .ruler .mid { position:absolute; top:0; bottom:0; width:2px; left:50%; margin-left:-1px; background:#2962ff;}
+
+    .actions { display:flex; gap:12px; margin-top:16px;}
+    .outline { background:#f6f7f9; border:1px solid #e6e8eb; color:#111; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h2>レポート(JS)</h2>
+
+    <div class="card" style="margin-top:12px;">
+      <div class="row">
+        <div class="big" id="currentW">--</div>
+        <div class="muted">kg</div>
+        <div class="right muted">
+          <div>最も重い <span id="maxW">--</span></div>
+          <div style="margin-top:6px;">最も軽い <span id="minW">--</span></div>
+        </div>
+        <button class="btn" id="btnRecord">記録する</button>
+      </div>
+      <div style="height:12px;"></div>
+      <canvas id="chart" height="180"></canvas>
+    </div>
+  </div>
+
+  <!-- 記録シート -->
+  <div class="sheet" id="sheet">
+    <div class="handle"></div>
+    <div class="row" style="justify-content:space-between;">
+      <div style="font-size:22px; font-weight:800;">体重</div>
+      <div class="muted" id="dateLabel"></div>
+    </div>
+
+    <div style="height:10px;"></div>
+
+    <div class="seg">
+      <button id="segKg" class="on">kg</button>
+      <button id="segLb">lbs</button>
+    </div>
+
+    <div style="height:16px;"></div>
+
+    <div class="center" style="font-size:52px; font-weight:900; color:#0b57d0;">
+      <span id="num">--</span><span style="font-size:22px; color:#111; font-weight:700;" id="unit"> kg</span>
+    </div>
+
+    <div style="height:8px;"></div>
+
+    <!-- 目盛り（タップ一発 + 横ドラッグで値変更） -->
+    <div class="ruler" id="ruler"></div>
+
+    <div class="actions">
+      <button class="outline" style="flex:1; border-radius:14px; padding:12px 0;" id="cancel">キャンセル</button>
+      <button class="btn" style="flex:1; border-radius:14px; padding:12px 0;" id="save">保存</button>
+    </div>
+  </div>
+</body>
+</html>
