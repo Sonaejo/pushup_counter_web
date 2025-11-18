@@ -32,7 +32,7 @@
     }
   </style>
 
-  <!-- ===== Pose Landmarker 部分（既存） ===== -->
+  <!-- ===== Pose Landmarker 部分（外カメラ切替対応） ===== -->
   <script type="module">
     import { PoseLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3";
 
@@ -40,7 +40,8 @@
     const emit = (name, detail) =>
       window.dispatchEvent(new CustomEvent(name, { detail }));
 
-    const pose = { stream: null, video: null, raf: null, landmarker: null };
+    // ★ facing: 'front' | 'back'
+    const pose = { stream: null, video: null, raf: null, landmarker: null, facing: 'front' };
 
     function ensurePoseVideo() {
       if (pose.video) return;
@@ -50,7 +51,7 @@
         position: 'fixed', left: '0', top: '0',
         width: '100vw', height: '100vh',
         objectFit: 'cover',
-        transform: 'scaleX(-1)',
+        transform: 'scaleX(-1)',     // ★ 初期はフロント（ミラー）
         zIndex: '0',
         pointerEvents: 'none',
         background: 'black',
@@ -62,13 +63,27 @@
 
     async function poseStartCamera() {
       ensurePoseVideo();
-      pose.stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+
+      const isFront = (pose.facing !== 'back');
+
+      const constraints = {
+        video: {
+          facingMode: isFront ? 'user' : { ideal: 'environment' },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
         audio: false,
-      });
+      };
+
+      pose.stream = await navigator.mediaDevices.getUserMedia(constraints);
       pose.video.srcObject = pose.stream;
       await pose.video.play();
-      emit('facing', { value: 'front' });
+
+      // ★ カメラ向きイベント（Flutter側でHUD表示＆ミラー制御用）
+      emit('facing', { value: isFront ? 'front' : 'back' });
+
+      // ★ フロントのときだけミラー表示
+      pose.video.style.transform = isFront ? 'scaleX(-1)' : 'none';
     }
 
     async function ensurePoseLandmarker() {
@@ -118,10 +133,15 @@
       pose.raf = requestAnimationFrame(poseLoop);
     }
 
+    // ★ Flutter側から呼ぶ：ポーズ開始
     window.poseStart = async function () {
       try {
         if (!isHttps)
           emit('face:onError', { message: 'HTTPS でアクセスしてください（カメラ権限が必要）' });
+
+        // 初期値はフロント
+        pose.facing = 'front';
+
         await poseStartCamera();
         await ensurePoseLandmarker();
         cancelAnimationFrame(pose.raf);
@@ -129,6 +149,25 @@
       } catch (_) {}
     };
 
+    // ★ Flutter側から呼ぶ：フロント←→バック切替
+    window.poseSwitchCamera = async function () {
+      try {
+        // 既存ストリームを停止
+        if (pose.stream) {
+          try { pose.stream.getTracks().forEach(t => t.stop()); } catch (_) {}
+          pose.stream = null;
+        }
+        // 向きをトグル
+        pose.facing = (pose.facing === 'front') ? 'back' : 'front';
+
+        await poseStartCamera();
+        // landmarker / ループはそのまま使う（VIDEOモードなのでOK）
+      } catch (e) {
+        emit('face:onError', { message: 'poseSwitchCamera 失敗: ' + String(e) });
+      }
+    };
+
+    // ★ Flutter側から呼ぶ：停止
     window.poseStop = async function () {
       if (pose.raf) { cancelAnimationFrame(pose.raf); pose.raf = null; }
 
@@ -145,6 +184,8 @@
         try { pose.video.remove(); } catch (_) {}
         pose.video = null;
       }
+
+      // facing はそのまま保持しても良い（次回 poseStart でリセット）
     };
 
     window.addEventListener('error', e =>
