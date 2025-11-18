@@ -44,25 +44,37 @@
     const emitError = (msg) => {
       emit('error',       { message: msg });
       emit('face:onError',{ message: msg });
+      console.error('[pose] ', msg);
     };
 
     // ★ facing: 'front' | 'back'
-    const pose = { stream: null, video: null, raf: null, landmarker: null, facing: 'front' };
+    const pose = {
+      stream: null,
+      video:  null,
+      raf:    null,
+      landmarker: null,
+      facing: 'front',
+    };
 
     function ensurePoseVideo() {
       if (pose.video) return;
       const v = document.createElement('video');
       v.id = 'pose-video';
       Object.assign(v.style, {
-        position: 'fixed', left: '0', top: '0',
-        width: '100vw', height: '100vh',
+        position: 'fixed',
+        left: '0',
+        top: '0',
+        width: '100vw',
+        height: '100vh',
         objectFit: 'cover',
-        transform: 'scaleX(-1)',     // ★ 初期はフロント（ミラー）
+        transform: 'scaleX(-1)',   // ★ 初期はフロント（ミラー）
         zIndex: '0',
         pointerEvents: 'none',
         background: 'black',
       });
-      v.autoplay = true; v.muted = true; v.playsInline = true;
+      v.autoplay = true;
+      v.muted = true;
+      v.playsInline = true;
       document.body.appendChild(v);
       pose.video = v;
     }
@@ -75,15 +87,28 @@
       const constraints = {
         video: {
           facingMode: isFront ? 'user' : { ideal: 'environment' },
-          width: { ideal: 1280 },
+          width:  { ideal: 1280 },
           height: { ideal: 720 },
         },
         audio: false,
       };
 
-      pose.stream = await navigator.mediaDevices.getUserMedia(constraints);
+      try {
+        pose.stream = await navigator.mediaDevices.getUserMedia(constraints);
+      } catch (err) {
+        // ★ 環境カメラが取れない端末ではフロントにフォールバック
+        if (!isFront) {
+          console.warn('[pose] back camera failed, fallback to front', err);
+          pose.facing = 'front';
+          return poseStartCamera();
+        }
+        throw err;
+      }
+
       pose.video.srcObject = pose.stream;
-      await pose.video.play();
+      await pose.video.play().catch((e) => {
+        console.warn('[pose] video.play() failed', e);
+      });
 
       // ★ カメラ向きイベント（使いたくなったら Flutter 側でリッスン可能）
       emit('facing', { value: isFront ? 'front' : 'back' });
@@ -144,6 +169,19 @@
       try {
         if (!isHttps) {
           emitError('HTTPS でアクセスしてください（カメラ権限が必要）');
+          return;
+        }
+
+        // 既存ループは一旦停止
+        if (pose.raf) {
+          cancelAnimationFrame(pose.raf);
+          pose.raf = null;
+        }
+
+        // 既存ストリームを停止してクリーンに
+        if (pose.stream) {
+          try { pose.stream.getTracks().forEach(t => t.stop()); } catch (_) {}
+          pose.stream = null;
         }
 
         // 初期値はフロント
@@ -151,7 +189,6 @@
 
         await poseStartCamera();
         await ensurePoseLandmarker();
-        cancelAnimationFrame(pose.raf);
         poseLoop();
       } catch (e) {
         emitError('poseStart 失敗: ' + String(e));
@@ -161,11 +198,17 @@
     // ★ Flutter側から呼ぶ：フロント←→バック切替
     window.poseSwitchCamera = async function () {
       try {
+        if (!isHttps) {
+          emitError('HTTPS でアクセスしてください（カメラ権限が必要）');
+          return;
+        }
+
         // 既存ストリームを停止
         if (pose.stream) {
           try { pose.stream.getTracks().forEach(t => t.stop()); } catch (_) {}
           pose.stream = null;
         }
+
         // 向きをトグル
         pose.facing = (pose.facing === 'front') ? 'back' : 'front';
 
