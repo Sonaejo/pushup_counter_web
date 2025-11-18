@@ -40,35 +40,29 @@
     const emit = (name, detail) =>
       window.dispatchEvent(new CustomEvent(name, { detail }));
 
-    // ★ facing: 'front' | 'back'
-    const pose = {
-      stream: null,
-      video: null,
-      raf: null,
-      landmarker: null,
-      facing: 'front',
-      running: false,
+    // ★ pose 関連のエラーを Flutter 側にも飛ばす（'error' と 'face:onError' 両方）
+    const emitError = (msg) => {
+      emit('error',       { message: msg });
+      emit('face:onError',{ message: msg });
     };
+
+    // ★ facing: 'front' | 'back'
+    const pose = { stream: null, video: null, raf: null, landmarker: null, facing: 'front' };
 
     function ensurePoseVideo() {
       if (pose.video) return;
       const v = document.createElement('video');
       v.id = 'pose-video';
       Object.assign(v.style, {
-        position: 'fixed',
-        left: '0',
-        top: '0',
-        width: '100vw',
-        height: '100vh',
+        position: 'fixed', left: '0', top: '0',
+        width: '100vw', height: '100vh',
         objectFit: 'cover',
         transform: 'scaleX(-1)',     // ★ 初期はフロント（ミラー）
         zIndex: '0',
         pointerEvents: 'none',
         background: 'black',
       });
-      v.autoplay = true;
-      v.muted = true;
-      v.playsInline = true;
+      v.autoplay = true; v.muted = true; v.playsInline = true;
       document.body.appendChild(v);
       pose.video = v;
     }
@@ -87,12 +81,11 @@
         audio: false,
       };
 
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      pose.stream = stream;
-      pose.video.srcObject = stream;
+      pose.stream = await navigator.mediaDevices.getUserMedia(constraints);
+      pose.video.srcObject = pose.stream;
       await pose.video.play();
 
-      // ★ カメラ向きイベント（Flutter側でHUD表示などに使いたければ）
+      // ★ カメラ向きイベント（使いたくなったら Flutter 側でリッスン可能）
       emit('facing', { value: isFront ? 'front' : 'back' });
 
       // ★ フロントのときだけミラー表示
@@ -132,12 +125,7 @@
     }
 
     function poseLoop() {
-      if (!pose.running) return;
-      if (!pose.landmarker || !pose.video) {
-        pose.raf = requestAnimationFrame(poseLoop);
-        return;
-      }
-
+      if (!pose.landmarker || !pose.video) return;
       const now = performance.now();
       try {
         const res = pose.landmarker.detectForVideo(pose.video, now);
@@ -146,34 +134,31 @@
           if (named) emit('pose', { landmarks: named });
         }
       } catch (e) {
-        emit('face:onError', { message: 'pose detectForVideo 失敗: ' + String(e) });
+        emitError('pose detectForVideo 失敗: ' + String(e));
       }
       pose.raf = requestAnimationFrame(poseLoop);
     }
 
-    // === Flutter側から呼ぶ関数を global に生やす =======================
-    // ★ ポーズ開始
+    // ★ Flutter側から呼ぶ：ポーズ開始
     window.poseStart = async function () {
       try {
         if (!isHttps) {
-          emit('face:onError', { message: 'HTTPS でアクセスしてください（カメラ権限が必要）' });
+          emitError('HTTPS でアクセスしてください（カメラ権限が必要）');
         }
 
         // 初期値はフロント
         pose.facing = 'front';
-        pose.running = true;
 
         await poseStartCamera();
         await ensurePoseLandmarker();
-
-        if (pose.raf) cancelAnimationFrame(pose.raf);
-        pose.raf = requestAnimationFrame(poseLoop);
+        cancelAnimationFrame(pose.raf);
+        poseLoop();
       } catch (e) {
-        emit('face:onError', { message: 'poseStart 失敗: ' + String(e) });
+        emitError('poseStart 失敗: ' + String(e));
       }
     };
 
-    // ★ カメラ Front / Back 切り替え
+    // ★ Flutter側から呼ぶ：フロント←→バック切替
     window.poseSwitchCamera = async function () {
       try {
         // 既存ストリームを停止
@@ -181,24 +166,19 @@
           try { pose.stream.getTracks().forEach(t => t.stop()); } catch (_) {}
           pose.stream = null;
         }
-
         // 向きをトグル
         pose.facing = (pose.facing === 'front') ? 'back' : 'front';
 
-        // 新しいカメラで再取得（landmarker は再利用）
         await poseStartCamera();
+        // landmarker / ループはそのまま使う（VIDEOモードなのでOK）
       } catch (e) {
-        emit('face:onError', { message: 'poseSwitchCamera 失敗: ' + String(e) });
+        emitError('poseSwitchCamera 失敗: ' + String(e));
       }
     };
 
-    // ★ 停止
+    // ★ Flutter側から呼ぶ：停止
     window.poseStop = async function () {
-      pose.running = false;
-      if (pose.raf) {
-        cancelAnimationFrame(pose.raf);
-        pose.raf = null;
-      }
+      if (pose.raf) { cancelAnimationFrame(pose.raf); pose.raf = null; }
 
       try { await pose.landmarker?.close?.(); } catch (_) {}
       pose.landmarker = null;
@@ -213,16 +193,15 @@
         try { pose.video.remove(); } catch (_) {}
         pose.video = null;
       }
-
-      // facing は次回 poseStart で front にリセット
+      // facing は次の poseStart で front に戻す
     };
 
-    // JS全体のエラーを Flutter 側に送る
+    // JS 全体のエラーも Flutter 側へ
     window.addEventListener('error', e =>
-      emit('face:onError', { message: String(e?.message ?? e) })
+      emitError(String(e?.message ?? e))
     );
     window.addEventListener('unhandledrejection', e =>
-      emit('face:onError', { message: String(e?.reason ?? e) })
+      emitError(String(e?.reason ?? e))
     );
   </script>
 
@@ -233,6 +212,8 @@
   <script type="module" src="face_module.js"></script>
 
   <!-- ※※ ゴースト UI（ghost-bar / ghost-help）は完全削除済み ※※ -->
+  <!-- 右下のHUDは face_runtime.js 内の描画なので残る -->
+
 </head>
 
 <body>
