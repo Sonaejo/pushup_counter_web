@@ -68,8 +68,7 @@
       });
       v.autoplay = true;
       v.muted = true;
-      v.playsInline = true; // iOS Safari 向け
-      v.setAttribute('playsinline', 'true');
+      v.playsInline = true;
       document.body.appendChild(v);
       pose.video = v;
     }
@@ -79,36 +78,25 @@
 
       const isFront = (pose.facing !== 'back');
 
-      const videoConstraints = isFront
-        ? {
-            facingMode: 'user',
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-          }
-        : {
-            facingMode: { exact: 'environment' }, // ← iOS で安定しやすい
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-          };
+      const constraints = {
+        video: {
+          facingMode: isFront ? 'user' : { ideal: 'environment' },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+        audio: false,
+      };
 
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: videoConstraints,
-          audio: false,
-        });
-        pose.stream = stream;
-        pose.video.srcObject = stream;
-        await pose.video.play();
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      pose.stream = stream;
+      pose.video.srcObject = stream;
+      await pose.video.play();
 
-        // ★ カメラ向きイベント（Flutter側でHUD表示などに使いたければ）
-        emit('facing', { value: isFront ? 'front' : 'back' });
+      // ★ カメラ向きイベント（Flutter側でHUD表示などに使いたければ）
+      emit('facing', { value: isFront ? 'front' : 'back' });
 
-        // ★ フロントのときだけミラー表示
-        pose.video.style.transform = isFront ? 'scaleX(-1)' : 'none';
-      } catch (e) {
-        emit('face:onError', { message: 'getUserMedia 失敗: ' + String(e) });
-        throw e;
-      }
+      // ★ フロントのときだけミラー表示
+      pose.video.style.transform = isFront ? 'scaleX(-1)' : 'none';
     }
 
     async function ensurePoseLandmarker() {
@@ -199,15 +187,6 @@
 
         // 新しいカメラで再取得（landmarker は再利用）
         await poseStartCamera();
-
-        // 念のためループを再開
-        if (!pose.running) {
-          pose.running = true;
-        }
-        if (pose.raf) {
-          cancelAnimationFrame(pose.raf);
-        }
-        pose.raf = requestAnimationFrame(poseLoop);
       } catch (e) {
         emit('face:onError', { message: 'poseSwitchCamera 失敗: ' + String(e) });
       }
@@ -234,6 +213,7 @@
         try { pose.video.remove(); } catch (_) {}
         pose.video = null;
       }
+
       // facing は次回 poseStart で front にリセット
     };
 
