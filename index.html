@@ -40,6 +40,12 @@
     const emit = (name, detail) =>
       window.dispatchEvent(new CustomEvent(name, { detail }));
 
+    // ★ pose 関連のエラーを Flutter 側にも飛ばす（'error' と 'face:onError' 両方）
+    const emitError = (msg) => {
+      emit('error',       { message: msg });
+      emit('face:onError',{ message: msg });
+    };
+
     // ★ facing: 'front' | 'back'
     const pose = { stream: null, video: null, raf: null, landmarker: null, facing: 'front' };
 
@@ -79,7 +85,7 @@
       pose.video.srcObject = pose.stream;
       await pose.video.play();
 
-      // ★ カメラ向きイベント（Flutter側でHUD表示＆ミラー制御用）
+      // ★ カメラ向きイベント（使いたくなったら Flutter 側でリッスン可能）
       emit('facing', { value: isFront ? 'front' : 'back' });
 
       // ★ フロントのときだけミラー表示
@@ -128,7 +134,7 @@
           if (named) emit('pose', { landmarks: named });
         }
       } catch (e) {
-        emit('face:onError', { message: 'pose detectForVideo 失敗: ' + String(e) });
+        emitError('pose detectForVideo 失敗: ' + String(e));
       }
       pose.raf = requestAnimationFrame(poseLoop);
     }
@@ -136,8 +142,9 @@
     // ★ Flutter側から呼ぶ：ポーズ開始
     window.poseStart = async function () {
       try {
-        if (!isHttps)
-          emit('face:onError', { message: 'HTTPS でアクセスしてください（カメラ権限が必要）' });
+        if (!isHttps) {
+          emitError('HTTPS でアクセスしてください（カメラ権限が必要）');
+        }
 
         // 初期値はフロント
         pose.facing = 'front';
@@ -146,7 +153,9 @@
         await ensurePoseLandmarker();
         cancelAnimationFrame(pose.raf);
         poseLoop();
-      } catch (_) {}
+      } catch (e) {
+        emitError('poseStart 失敗: ' + String(e));
+      }
     };
 
     // ★ Flutter側から呼ぶ：フロント←→バック切替
@@ -163,7 +172,7 @@
         await poseStartCamera();
         // landmarker / ループはそのまま使う（VIDEOモードなのでOK）
       } catch (e) {
-        emit('face:onError', { message: 'poseSwitchCamera 失敗: ' + String(e) });
+        emitError('poseSwitchCamera 失敗: ' + String(e));
       }
     };
 
@@ -184,15 +193,15 @@
         try { pose.video.remove(); } catch (_) {}
         pose.video = null;
       }
-
-      // facing はそのまま保持しても良い（次回 poseStart でリセット）
+      // facing は次の poseStart で front に戻す
     };
 
+    // JS 全体のエラーも Flutter 側へ
     window.addEventListener('error', e =>
-      emit('face:onError', { message: String(e?.message ?? e) })
+      emitError(String(e?.message ?? e))
     );
     window.addEventListener('unhandledrejection', e =>
-      emit('face:onError', { message: String(e?.reason ?? e) })
+      emitError(String(e?.reason ?? e))
     );
   </script>
 
