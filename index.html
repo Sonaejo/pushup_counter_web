@@ -40,10 +40,9 @@
     const emit = (name, detail) =>
       window.dispatchEvent(new CustomEvent(name, { detail }));
 
-    // ★ pose 関連のエラーを Flutter 側にも飛ばす（'error' と 'face:onError' 両方）
+    // ★ pose 関連のエラーを Flutter 側にも飛ばす（'pose:error'）
     const emitError = (msg) => {
-      emit('error',       { message: msg });
-      emit('face:onError',{ message: msg });
+      emit('pose:error', { message: msg });
       console.error('[pose] ', msg);
     };
 
@@ -110,7 +109,7 @@
         console.warn('[pose] video.play() failed', e);
       });
 
-      // ★ カメラ向きイベント（使いたくなったら Flutter 側でリッスン可能）
+      // ★ カメラ向きイベント（必要なら Flutter 側で使える）
       emit('facing', { value: isFront ? 'front' : 'back' });
 
       // ★ フロントのときだけミラー表示
@@ -172,13 +171,13 @@
           return;
         }
 
-        // 既存ループは一旦停止
+        // ループ停止
         if (pose.raf) {
           cancelAnimationFrame(pose.raf);
           pose.raf = null;
         }
 
-        // 既存ストリームを停止してクリーンに
+        // 既存ストリーム停止
         if (pose.stream) {
           try { pose.stream.getTracks().forEach(t => t.stop()); } catch (_) {}
           pose.stream = null;
@@ -203,7 +202,13 @@
           return;
         }
 
-        // 既存ストリームを停止
+        // ループ一旦停止
+        if (pose.raf) {
+          cancelAnimationFrame(pose.raf);
+          pose.raf = null;
+        }
+
+        // 既存ストリーム停止
         if (pose.stream) {
           try { pose.stream.getTracks().forEach(t => t.stop()); } catch (_) {}
           pose.stream = null;
@@ -213,7 +218,8 @@
         pose.facing = (pose.facing === 'front') ? 'back' : 'front';
 
         await poseStartCamera();
-        // landmarker / ループはそのまま使う（VIDEOモードなのでOK）
+        await ensurePoseLandmarker();
+        poseLoop();
       } catch (e) {
         emitError('poseSwitchCamera 失敗: ' + String(e));
       }
@@ -236,7 +242,6 @@
         try { pose.video.remove(); } catch (_) {}
         pose.video = null;
       }
-      // facing は次の poseStart で front に戻す
     };
 
     // JS 全体のエラーも Flutter 側へ
@@ -254,8 +259,7 @@
   <!-- Face Module（Flutter <-> JS）-->
   <script type="module" src="face_module.js"></script>
 
-  <!-- ※※ ゴースト UI（ghost-bar / ghost-help）は完全削除済み ※※ -->
-  <!-- 右下のHUDは face_runtime.js 内の描画なので残る -->
+  <!-- ゴースト UI（ghost-bar / ghost-help）は削除済み -->
 
 </head>
 
