@@ -32,7 +32,7 @@
     }
   </style>
 
-  <!-- ===== Pose Landmarker 部分（外カメラ切替対応） ===== -->
+  <!-- ===== Pose Landmarker 部分（外カメラ切替対応＋足先＋エラーイベント分離） ===== -->
   <script type="module">
     import { PoseLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3";
 
@@ -40,40 +40,29 @@
     const emit = (name, detail) =>
       window.dispatchEvent(new CustomEvent(name, { detail }));
 
-    // ★ pose 関連のエラーを Flutter 側にも飛ばす（'pose:error'）
+    // ★ pose 関連のエラーを Flutter 側にも飛ばす（'poseError' と 'face:onError' 両方）
     const emitError = (msg) => {
-      emit('pose:error', { message: msg });
-      console.error('[pose] ', msg);
+      emit('poseError',   { message: msg });
+      emit('face:onError',{ message: msg });
     };
 
     // ★ facing: 'front' | 'back'
-    const pose = {
-      stream: null,
-      video:  null,
-      raf:    null,
-      landmarker: null,
-      facing: 'front',
-    };
+    const pose = { stream: null, video: null, raf: null, landmarker: null, facing: 'front' };
 
     function ensurePoseVideo() {
       if (pose.video) return;
       const v = document.createElement('video');
       v.id = 'pose-video';
       Object.assign(v.style, {
-        position: 'fixed',
-        left: '0',
-        top: '0',
-        width: '100vw',
-        height: '100vh',
+        position: 'fixed', left: '0', top: '0',
+        width: '100vw', height: '100vh',
         objectFit: 'cover',
-        transform: 'scaleX(-1)',   // ★ 初期はフロント（ミラー）
+        transform: 'scaleX(-1)',     // ★ 初期はフロント（ミラー）
         zIndex: '0',
         pointerEvents: 'none',
         background: 'black',
       });
-      v.autoplay = true;
-      v.muted = true;
-      v.playsInline = true;
+      v.autoplay = true; v.muted = true; v.playsInline = true;
       document.body.appendChild(v);
       pose.video = v;
     }
@@ -86,30 +75,17 @@
       const constraints = {
         video: {
           facingMode: isFront ? 'user' : { ideal: 'environment' },
-          width:  { ideal: 1280 },
+          width: { ideal: 1280 },
           height: { ideal: 720 },
         },
         audio: false,
       };
 
-      try {
-        pose.stream = await navigator.mediaDevices.getUserMedia(constraints);
-      } catch (err) {
-        // ★ 環境カメラが取れない端末ではフロントにフォールバック
-        if (!isFront) {
-          console.warn('[pose] back camera failed, fallback to front', err);
-          pose.facing = 'front';
-          return poseStartCamera();
-        }
-        throw err;
-      }
-
+      pose.stream = await navigator.mediaDevices.getUserMedia(constraints);
       pose.video.srcObject = pose.stream;
-      await pose.video.play().catch((e) => {
-        console.warn('[pose] video.play() failed', e);
-      });
+      await pose.video.play();
 
-      // ★ カメラ向きイベント（必要なら Flutter 側で使える）
+      // ★ カメラ向きイベント（Flutter 側でリッスン）
       emit('facing', { value: isFront ? 'front' : 'back' });
 
       // ★ フロントのときだけミラー表示
@@ -135,16 +111,20 @@
       return pose.landmarker;
     }
 
+    // ★ BlazePose index → 名前付き 12点＋足先2点
     function toNamedPose(lm) {
       if (!lm || !lm.length) return null;
       const p = (i) => ({ x: lm[i].x, y: lm[i].y });
       return {
-        leftShoulder: p(11), rightShoulder: p(12),
-        leftElbow:    p(13), rightElbow:    p(14),
-        leftWrist:    p(15), rightWrist:    p(16),
-        leftHip:      p(23), rightHip:      p(24),
-        leftKnee:     p(25), rightKnee:     p(26),
-        leftAnkle:    p(27), rightAnkle:    p(28),
+        leftShoulder:  p(11), rightShoulder: p(12),
+        leftElbow:     p(13), rightElbow:   p(14),
+        leftWrist:     p(15), rightWrist:   p(16),
+        leftHip:       p(23), rightHip:     p(24),
+        leftKnee:      p(25), rightKnee:    p(26),
+        leftAnkle:     p(27), rightAnkle:   p(28),
+        // ★ つま先（足先まで線を伸ばす用）
+        leftFootIndex:  p(31),
+        rightFootIndex: p(32),
       };
     }
 
@@ -168,19 +148,6 @@
       try {
         if (!isHttps) {
           emitError('HTTPS でアクセスしてください（カメラ権限が必要）');
-          return;
-        }
-
-        // ループ停止
-        if (pose.raf) {
-          cancelAnimationFrame(pose.raf);
-          pose.raf = null;
-        }
-
-        // 既存ストリーム停止
-        if (pose.stream) {
-          try { pose.stream.getTracks().forEach(t => t.stop()); } catch (_) {}
-          pose.stream = null;
         }
 
         // 初期値はフロント
@@ -188,6 +155,8 @@
 
         await poseStartCamera();
         await ensurePoseLandmarker();
+        cancelAnimationFrame(pose.raf);
+        pose.raf = null;
         poseLoop();
       } catch (e) {
         emitError('poseStart 失敗: ' + String(e));
@@ -197,29 +166,16 @@
     // ★ Flutter側から呼ぶ：フロント←→バック切替
     window.poseSwitchCamera = async function () {
       try {
-        if (!isHttps) {
-          emitError('HTTPS でアクセスしてください（カメラ権限が必要）');
-          return;
-        }
-
-        // ループ一旦停止
-        if (pose.raf) {
-          cancelAnimationFrame(pose.raf);
-          pose.raf = null;
-        }
-
-        // 既存ストリーム停止
+        // 既存ストリームを停止
         if (pose.stream) {
           try { pose.stream.getTracks().forEach(t => t.stop()); } catch (_) {}
           pose.stream = null;
         }
-
         // 向きをトグル
         pose.facing = (pose.facing === 'front') ? 'back' : 'front';
 
         await poseStartCamera();
-        await ensurePoseLandmarker();
-        poseLoop();
+        // landmarker / ループはそのまま使う（VIDEOモードなのでOK）
       } catch (e) {
         emitError('poseSwitchCamera 失敗: ' + String(e));
       }
@@ -242,9 +198,10 @@
         try { pose.video.remove(); } catch (_) {}
         pose.video = null;
       }
+      // facing は次の poseStart で front に戻す
     };
 
-    // JS 全体のエラーも Flutter 側へ
+    // JS 全体のエラーも Flutter 側へ転送
     window.addEventListener('error', e =>
       emitError(String(e?.message ?? e))
     );
@@ -259,7 +216,8 @@
   <!-- Face Module（Flutter <-> JS）-->
   <script type="module" src="face_module.js"></script>
 
-  <!-- ゴースト UI（ghost-bar / ghost-help）は削除済み -->
+  <!-- ※※ ゴースト UI（ghost-bar / ghost-help）は完全削除済み ※※ -->
+  <!-- 右下のHUDは face_runtime.js 内の描画なので残る -->
 
 </head>
 
